@@ -63,10 +63,28 @@ public:
         analogWriteFreq(1000);
         analogWrite(_gatePin, 0);
 #endif
+
+        // 5. UART Diagnostics Initialization Banner
+        Serial.println();
+        Serial.printf("[DISPENSER] Hardware Initialized:\n");
+        Serial.printf("  - Left Button (40s)  : GPIO %d (Internal Pull-Up)\n", _btnLeftPin);
+        Serial.printf("  - Mid Button (Abort) : GPIO %d (Internal Pull-Up)\n", _btnMidPin);
+        Serial.printf("  - Right Button (80s) : GPIO %d (Internal Pull-Up)\n", _btnRightPin);
+        Serial.printf("  - MOSFET Gate Output : GPIO %d (LEDC Ch%d, 1kHz, 500ms Soft-Start)\n", _gatePin, _pwmChannel);
+        Serial.printf("  - Status Indicator   : GPIO %d\n", _ledPin);
+        Serial.println(F("[DISPENSER] Ready. Type '?' in Serial terminal for UART diagnostic commands."));
     }
 
     void loop() override {
         uint32_t now = millis();
+
+        // -------------------------------------------------------------
+        // 0. Interactive UART Console Diagnostics & Commands
+        // -------------------------------------------------------------
+        if (Serial.available() > 0) {
+            char c = (char)Serial.read();
+            handleUartCommand(c);
+        }
 
         // -------------------------------------------------------------
         // 1. Soft-Start Ramp & Concurrent Mode Blinking
@@ -87,6 +105,7 @@ public:
                 digitalWrite(_ledPin, HIGH);
                 _softStartActive = false;
                 _ledSolidOn = true;
+                Serial.println(F("[MOTOR] Soft-start ramp complete -> 100% Full Power (Duty 255/255)"));
             }
         }
 
@@ -94,14 +113,14 @@ public:
         // 2. Button 1: Left Button (40s Mode / Cancel)
         // -------------------------------------------------------------
         if (checkButtonDebounced(_btnLeftPin, _leftPressStartMs, _leftTriggered)) {
+            Serial.printf("[BUTTON] Left Button (GPIO %d) triggered!\n", _btnLeftPin);
             if (_mode == MODE_40S) {
-                // Same button pressed while 40s running -> STOP
+                Serial.println(F("[BUTTON] Same button pressed during 40s pour -> ABORT."));
                 stopPump();
             } else if (_mode == MODE_80S || _mode == MODE_CONTINUOUS) {
-                // Switch 80s -> 40s or Continuous -> 40s: cancel/stop immediately
+                Serial.println(F("[BUTTON] Cannot switch down from 80s/Continuous to 40s -> STOP."));
                 stopPump();
             } else {
-                // Fresh start: 40s
                 startPumpFresh(MODE_40S, 40000UL, 1);
             }
         }
@@ -110,11 +129,11 @@ public:
         // 3. Button 2: Middle Button (Toggle Continuous ON / Cancel / Abort)
         // -------------------------------------------------------------
         if (checkButtonDebounced(_btnMidPin, _midPressStartMs, _midTriggered)) {
+            Serial.printf("[BUTTON] Middle Button (GPIO %d) triggered!\n", _btnMidPin);
             if (_pumpRunning) {
-                // Running in ANY mode -> Abort/Cancel immediately!
+                Serial.println(F("[BUTTON] Middle Button pressed while pump running -> EMERGENCY ABORT!"));
                 stopPump();
             } else {
-                // OFF -> Start Continuous Mode (3 blinks)
                 startPumpFresh(MODE_CONTINUOUS, 900000UL, 3); // 15 min safety timeout
             }
         }
@@ -123,18 +142,19 @@ public:
         // 4. Button 3: Right Button (80s Mode / Extension)
         // -------------------------------------------------------------
         if (checkButtonDebounced(_btnRightPin, _rightPressStartMs, _rightTriggered)) {
+            Serial.printf("[BUTTON] Right Button (GPIO %d) triggered!\n", _btnRightPin);
             if (_mode == MODE_80S) {
-                // Same button pressed while 80s running -> STOP
+                Serial.println(F("[BUTTON] Same button pressed during 80s pour -> ABORT."));
                 stopPump();
             } else if (_mode == MODE_40S) {
-                // Smart Switch 40s -> 80s: Extend total target to 80s without pausing motor!
+                Serial.println(F("[DISPENSER] Smart Switch: 40s -> 80s! Extending total pour duration to 80s."));
                 _mode = MODE_80S;
                 _pumpDurationMs = 80000UL;
                 blinkLedAlert(2, 120, 100);
             } else if (_mode == MODE_CONTINUOUS) {
+                Serial.println(F("[BUTTON] Right Button pressed while in Continuous Mode -> STOP."));
                 stopPump();
             } else {
-                // Fresh start: 80s (2 blinks)
                 startPumpFresh(MODE_80S, 80000UL, 2);
             }
         }
@@ -143,8 +163,18 @@ public:
         // 5. Automatic Timer Expiration (Timed Dispense)
         // -------------------------------------------------------------
         if (_pumpRunning && (_mode == MODE_40S || _mode == MODE_80S || _mode == MODE_CONTINUOUS)) {
-            if ((now - _pumpStartMs) >= _pumpDurationMs) {
+            uint32_t elapsed = now - _pumpStartMs;
+            if (elapsed >= _pumpDurationMs) {
+                Serial.printf("[DISPENSER] Target duration reached (%lu ms) -> Automatically stopping pump.\n", _pumpDurationMs);
                 stopPump();
+            } else {
+                // Periodic UART Telemetry Heartbeat every 5000ms while running
+                if (now - _lastPeriodicReportMs >= 5000) {
+                    _lastPeriodicReportMs = now;
+                    uint32_t remainingSec = (_pumpDurationMs - elapsed) / 1000;
+                    Serial.printf("[DISPENSER] Pouring (%s): %lu s elapsed, %lu s remaining (Duty: %d/255)\n",
+                                  getModeString(), elapsed / 1000, remainingSec, _softStartActive ? 128 : 255);
+                }
             }
         }
     }
@@ -255,6 +285,71 @@ private:
     uint32_t _rightPressStartMs = 0;
     bool _rightTriggered = false;
 
+    uint32_t _lastPeriodicReportMs = 0;
+
+    const char* getModeString() const {
+        switch (_mode) {
+            case MODE_40S: return "40s Cup Mode";
+            case MODE_80S: return "80s Bottle Mode";
+            case MODE_CONTINUOUS: return "Continuous Mode";
+            default: return "IDLE";
+        }
+    }
+
+    void handleUartCommand(char c) {
+        switch (c) {
+            case '1':
+                Serial.println(F("\n[UART-CMD] '1' -> Start 40s Dispense"));
+                startPumpFresh(MODE_40S, 40000UL, 1);
+                break;
+            case '2':
+                Serial.println(F("\n[UART-CMD] '2' -> Start 80s Dispense"));
+                startPumpFresh(MODE_80S, 80000UL, 2);
+                break;
+            case 'c':
+            case 'C':
+                Serial.println(F("\n[UART-CMD] 'c' -> Start Continuous Dispense (15m limit)"));
+                startPumpFresh(MODE_CONTINUOUS, 900000UL, 3);
+                break;
+            case 'x':
+            case 'X':
+            case ' ':
+                Serial.println(F("\n[UART-CMD] EMERGENCY STOP / ABORT"));
+                stopPump();
+                break;
+            case 's':
+            case 'S':
+                Serial.println(F("\n[UART-CMD] Status Query:"));
+                Serial.println(getStatusJson());
+                break;
+            case '?':
+            case 'h':
+            case 'H':
+                Serial.println();
+                Serial.println(F("=================================================="));
+                Serial.println(F(" 💧 CraftThingy Dispenser UART Diagnostic Menu    "));
+                Serial.println(F("=================================================="));
+                Serial.printf(" State   : %s (Running: %s, Duty: %d)\n", 
+                              getModeString(), _pumpRunning ? "YES" : "NO", _pumpRunning ? 255 : 0);
+                if (_pumpRunning) {
+                    uint32_t el = (millis() - _pumpStartMs) / 1000;
+                    uint32_t tot = _pumpDurationMs / 1000;
+                    Serial.printf(" Pouring : %lu s / %lu s (Remaining: %lu s)\n", el, tot, tot > el ? tot - el : 0);
+                }
+                Serial.println(F(" Commands:"));
+                Serial.println(F("   [1] Dispense 40 seconds"));
+                Serial.println(F("   [2] Dispense 80 seconds"));
+                Serial.println(F("   [c] Dispense Continuous (15m safety max)"));
+                Serial.println(F("   [x] Emergency Stop / Abort"));
+                Serial.println(F("   [s] Dump JSON Telemetry"));
+                Serial.println(F("   [?] Display this diagnostic menu"));
+                Serial.println(F("=================================================="));
+                break;
+            default:
+                break;
+        }
+    }
+
     void setGateDuty(uint8_t duty) {
 #if defined(ESP32)
         ledcWrite(_pwmChannel, duty);
@@ -268,14 +363,26 @@ private:
         _pumpDurationMs = durationMs;
         _pumpStartMs = millis();
         _pumpRunning = true;
+        _lastPeriodicReportMs = millis();
 
         // 0ms Instant start: initiate soft-start ramp immediately!
         _softStartBlinks = blinks;
         _softStartStartMs = millis();
         _softStartActive = true;
+
+        Serial.printf("[DISPENSER] START POUR -> Mode: %s (%lu ms), Soft-Start Ramp: 500ms\n",
+                      getModeString(), durationMs);
     }
 
     void stopPump() {
+        if (_pumpRunning) {
+            uint32_t elapsed = millis() - _pumpStartMs;
+            Serial.printf("[DISPENSER] STOP POUR -> Total runtime: %lu ms (%lu s). Motor Gate OFF (Duty 0).\n",
+                          elapsed, elapsed / 1000);
+        } else {
+            Serial.println(F("[DISPENSER] Motor already OFF."));
+        }
+
         _mode = MODE_IDLE;
         _pumpRunning = false;
         _softStartActive = false;
