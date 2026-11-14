@@ -13,10 +13,11 @@
 // - GPIO 21: Button Right (80s Dispense)
 // - GPIO 22: MOSFET Gate Output (Hardware LEDC PWM Soft-Start)
 // - GPIO 2:  Status LED Indicator (Onboard LED on ESP32 DevKit)
+// - GPIO 25: Boost Converter Enable (XL6019 EN / Sleep Standby)
 #if defined(ESP8266)
-    static WaterDispenserController dispenserController(3, 2, 1, 0, 2);
+    static WaterDispenserController dispenserController(3, 2, 1, 0, 2, 255);
 #else
-    static WaterDispenserController dispenserController(18, 19, 21, 22, 2);
+    static WaterDispenserController dispenserController(18, 19, 21, 22, 2, 25);
 #endif
 
 void setup() {

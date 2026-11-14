@@ -37,10 +37,11 @@ Smart drinking water dispenser controller firmware engineered for **ESP32** (ESP
 
 | Function | Default ESP32 Pin | Active State | Description |
 | :--- | :--- | :--- | :--- |
-| **Left Button (40s)** | **GPIO 18** | Active LOW | Internal pull-up enabled + 50ms filter |
-| **Middle Button (Toggle/Cancel)** | **GPIO 19** | Active LOW | Internal pull-up enabled + 50ms filter |
-| **Right Button (80s)** | **GPIO 21** | Active LOW | Internal pull-up enabled + 50ms filter |
-| **MOSFET Gate** | **GPIO 22** | Active HIGH | LEDC Hardware PWM Channel 0 (1kHz, 8-bit) |
+| **Left Button (40s)** | **GPIO 18** | Active LOW | Internal pull-up enabled + 20ms debounce |
+| **Middle Button (Toggle/Cancel)** | **GPIO 19** | Active LOW | Internal pull-up enabled + 20ms debounce |
+| **Right Button (80s)** | **GPIO 21** | Active LOW | Internal pull-up enabled + 20ms debounce |
+| **MOSFET Gate** | **GPIO 22** | Active HIGH | LEDC Hardware PWM Channel 0 (1kHz, 8-bit soft-start) |
+| **Boost Enable (XL6019 EN)** | **GPIO 25** | Active HIGH | Boost sleep/wake control (cuts ~5mA idle current) |
 | **Status LED** | **GPIO 2** | Active HIGH | Onboard Blue LED on ESP32 DevKit boards |
 | **Power VIN** | **5V / VIN** | 4.5V – 12V | Connect to 5V Step-Up or 12V Boost Output |
 | **GND** | **GND** | 0V | Common System Ground |

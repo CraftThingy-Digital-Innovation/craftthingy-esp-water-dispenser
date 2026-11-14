@@ -17,13 +17,14 @@ public:
                              uint8_t btnMidPin = 19, 
                              uint8_t btnRightPin = 21, 
                              uint8_t gatePin = 22, 
-                             uint8_t ledPin = 2)
+                             uint8_t ledPin = 2,
+                             uint8_t boostEnPin = 25)
         : _btnLeftPin(btnLeftPin), _btnMidPin(btnMidPin), _btnRightPin(btnRightPin),
-          _gatePin(gatePin), _ledPin(ledPin),
+          _gatePin(gatePin), _ledPin(ledPin), _boostEnPin(boostEnPin),
           _mode(MODE_IDLE), _pumpRunning(false),
           _pumpStartMs(0), _pumpDurationMs(0),
           _pwmChannel(0), _pwmLimited(false),
-          _maxDuty(215),
+          _maxDuty(255),
           _softStartActive(false), _softStartStartMs(0), _softStartBlinks(1),
           _ledSolidOn(false) {
     }
@@ -35,6 +36,9 @@ public:
         PinManager::registerRole("btn_80s", "80s Dispense Button", _btnRightPin, PIN_CAP_INPUT);
         PinManager::registerRole("gate", "MOSFET Gate Output", _gatePin, PIN_CAP_OUTPUT);
         PinManager::registerRole("led", "Status LED Indicator", _ledPin, PIN_CAP_OUTPUT);
+        if (_boostEnPin != 255) {
+            PinManager::registerRole("boost_en", "Boost Converter Enable", _boostEnPin, PIN_CAP_OUTPUT);
+        }
 
         // Allow EEPROM / ConfigStore overrides if explicitly saved
         int8_t p;
@@ -43,6 +47,7 @@ public:
         if ((p = PinManager::getPin("btn_80s")) >= 0) _btnRightPin = (uint8_t)p;
         if ((p = PinManager::getPin("gate")) >= 0) _gatePin = (uint8_t)p;
         if ((p = PinManager::getPin("led")) >= 0) _ledPin = (uint8_t)p;
+        if (_boostEnPin != 255 && (p = PinManager::getPin("boost_en")) >= 0) _boostEnPin = (uint8_t)p;
 
         // 2. Configure Button Inputs with Internal Pull-Ups
         pinMode(_btnLeftPin, INPUT_PULLUP);
@@ -52,6 +57,12 @@ public:
         // 3. Configure Status LED
         pinMode(_ledPin, OUTPUT);
         digitalWrite(_ledPin, LOW);
+
+        // 3.1 Configure Boost Converter Enable Pin (starts in sleep/disabled mode)
+        if (_boostEnPin != 255) {
+            pinMode(_boostEnPin, OUTPUT);
+            digitalWrite(_boostEnPin, LOW);
+        }
 
         // 4. Configure MOSFET Gate (LEDC Hardware PWM on ESP32 / analogWrite on ESP8266)
 #if defined(ESP32)
@@ -73,6 +84,9 @@ public:
         Serial.printf("  - Right Button (80s) : GPIO %d (Internal Pull-Up)\n", _btnRightPin);
         Serial.printf("  - MOSFET Gate Output : GPIO %d (LEDC Ch%d, 1kHz, 500ms Soft-Start)\n", _gatePin, _pwmChannel);
         Serial.printf("  - Status Indicator   : GPIO %d\n", _ledPin);
+        if (_boostEnPin != 255) {
+            Serial.printf("  - Boost Enable (EN)  : GPIO %d (Sleep Standby: LOW)\n", _boostEnPin);
+        }
         Serial.println(F("[DISPENSER] Ready. Type '?' in Serial terminal for UART diagnostic commands."));
     }
 
@@ -275,6 +289,9 @@ public:
         json += "\"btn_80s\":" + String(_btnRightPin) + ",";
         json += "\"gate\":" + String(_gatePin) + ",";
         json += "\"led\":" + String(_ledPin);
+        if (_boostEnPin != 255) {
+            json += ",\"boost_en\":" + String(_boostEnPin);
+        }
         json += "}}";
         return json;
     }
@@ -285,6 +302,7 @@ private:
     uint8_t _btnRightPin;
     uint8_t _gatePin;
     uint8_t _ledPin;
+    uint8_t _boostEnPin;
 
     DispenserMode _mode;
     bool _pumpRunning;
@@ -353,7 +371,7 @@ private:
                 break;
             case 'p':
             case 'P':
-                Serial.printf("\n[PIN-DIAG] Real-Time Button & Gate Pin Levels:\n");
+                Serial.printf("\n[PIN-DIAG] Real-Time Button, Gate & Boost Pin Levels:\n");
                 Serial.printf("  - Left Button  (GPIO %d) : %s (digitalRead = %d)\n", 
                               _btnLeftPin, digitalRead(_btnLeftPin) == LOW ? "LOW (Pressed)" : "HIGH (Released)", digitalRead(_btnLeftPin));
                 Serial.printf("  - Mid Button   (GPIO %d) : %s (digitalRead = %d)\n", 
@@ -362,6 +380,10 @@ private:
                               _btnRightPin, digitalRead(_btnRightPin) == LOW ? "LOW (Pressed)" : "HIGH (Released)", digitalRead(_btnRightPin));
                 Serial.printf("  - MOSFET Gate  (GPIO %d) : %s (digitalRead = %d)\n", 
                               _gatePin, digitalRead(_gatePin) == HIGH ? "HIGH (MOSFET ON)" : "LOW (MOSFET OFF)", digitalRead(_gatePin));
+                if (_boostEnPin != 255) {
+                    Serial.printf("  - Boost Enable (GPIO %d) : %s (digitalRead = %d)\n", 
+                                  _boostEnPin, digitalRead(_boostEnPin) == HIGH ? "HIGH (Active 12V)" : "LOW (Sleep Standby)", digitalRead(_boostEnPin));
+                }
                 break;
             case 'w':
             case 'W':
@@ -427,13 +449,19 @@ private:
         _pumpRunning = true;
         _lastPeriodicReportMs = millis();
 
-        // 0ms Instant start: initiate soft-start ramp immediately!
+        // 1. Wake up Boost Converter and allow 50ms for 12V output rail to stabilize
+        if (_boostEnPin != 255) {
+            digitalWrite(_boostEnPin, HIGH);
+            delay(50);
+        }
+
+        // 2. Initiate soft-start ramp immediately
         _softStartBlinks = blinks;
         _softStartStartMs = millis();
         _softStartActive = true;
 
-        Serial.printf("[DISPENSER] START POUR -> Mode: %s (%lu ms), Soft-Start Ramp: 500ms\n",
-                      getModeString(), durationMs);
+        Serial.printf("[DISPENSER] START POUR -> Mode: %s (%lu ms), Soft-Start Ramp: 500ms%s\n",
+                      getModeString(), durationMs, _boostEnPin != 255 ? " (Boost EN: HIGH)" : "");
     }
 
     void stopPump() {
@@ -452,6 +480,13 @@ private:
 
         setGateDuty(0);
         digitalWrite(_ledPin, LOW);
+
+        // Put boost converter into sleep mode to eliminate battery standby drain
+        if (_boostEnPin != 255) {
+            delay(20);
+            digitalWrite(_boostEnPin, LOW);
+            Serial.println(F("[DISPENSER] Boost Converter disabled -> EN LOW (Sleep Standby)."));
+        }
     }
 
     /**
