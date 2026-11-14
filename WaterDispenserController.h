@@ -130,7 +130,7 @@ public:
         if (_softStartActive) {
             uint32_t elapsed = now - _softStartStartMs;
             if (elapsed < 500) {
-                // Smooth duty ramp from 10 up to _maxDuty (84% sweet spot) over 500ms
+                // Smooth duty ramp from 10 up to _maxDuty (100% full power) over 500ms
                 uint32_t duty = 10 + (elapsed * (_maxDuty - 10)) / 500;
                 setGateDuty((uint8_t)duty);
 
@@ -138,12 +138,12 @@ public:
                 bool ledOn = calculateSoftStartLed(elapsed, _softStartBlinks);
                 digitalWrite(_ledPin, ledOn ? HIGH : LOW);
             } else {
-                // Ramp complete: 84% power & solid LED
+                // Ramp complete: 100% full power & solid LED
                 setGateDuty(_maxDuty);
                 digitalWrite(_ledPin, HIGH);
                 _softStartActive = false;
                 _ledSolidOn = true;
-                Serial.printf("[MOTOR] Soft-start ramp complete -> Power: %d/255 (84%%) to protect boost & battery\n", _maxDuty);
+                Serial.printf("[MOTOR] Soft-start ramp complete -> Power: %d/255 (100%% Full Power)\n", _maxDuty);
             }
         }
 
@@ -224,7 +224,7 @@ public:
 
     // Application Version
     const char* getAppVersion() const override {
-        return "1.0.0";
+        return "1.1.0";
     }
 
     // OTA Safety Interlock:
