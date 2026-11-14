@@ -43,6 +43,15 @@ void setup() {
 
     // Launch CraftThingyCore with water dispenser controller attached
     CraftThingyCore.begin(&dispenserController);
+
+    // Wi-Fi Status Diagnostic Print
+    Serial.println();
+    if (WiFiManager::isConnected()) {
+        Serial.printf("[WIFI] Connected to home Wi-Fi! Station IP: %s\n", WiFiManager::getIPAddress().c_str());
+    } else if (WiFiManager::isAPMode()) {
+        Serial.printf("[WIFI] Setup Hotspot Active: '%s'\n", WiFiManager::getApSSID().c_str());
+        Serial.println(F("[WIFI] Connect your phone/laptop to this hotspot and open http://192.168.4.1 to configure Wi-Fi & OTA!"));
+    }
 }
 
 void loop() {

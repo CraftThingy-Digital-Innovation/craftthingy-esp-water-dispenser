@@ -363,6 +363,25 @@ private:
                 Serial.printf("  - MOSFET Gate  (GPIO %d) : %s (digitalRead = %d)\n", 
                               _gatePin, digitalRead(_gatePin) == HIGH ? "HIGH (MOSFET ON)" : "LOW (MOSFET OFF)", digitalRead(_gatePin));
                 break;
+            case 'w':
+            case 'W':
+                Serial.println();
+                Serial.println(F("=================================================="));
+                Serial.println(F(" 🌐 Wi-Fi & OTA Network Status                    "));
+                Serial.println(F("=================================================="));
+                Serial.printf(" Wi-Fi Connected : %s\n", WiFiManager::isConnected() ? "YES" : "NO");
+                if (WiFiManager::isConnected()) {
+                    Serial.printf(" Station IP      : %s\n", WiFiManager::getIPAddress().c_str());
+                    Serial.printf(" Gateway IP      : %s\n", WiFiManager::getGatewayIP().c_str());
+                } else if (WiFiManager::isAPMode()) {
+                    Serial.printf(" Setup Hotspot   : %s\n", WiFiManager::getApSSID().c_str());
+                    Serial.printf(" Hotspot IP      : %s\n", WiFiManager::getAPIPAddress().c_str());
+                    Serial.println(F(" Connect to this hotspot & open http://192.168.4.1 to configure!"));
+                }
+                Serial.printf(" MAC Address     : %s\n", WiFiManager::getMacAddress().c_str());
+                Serial.printf(" GitHub Repo     : CraftThingy-Digital-Innovation/craftthingy-esp-water-dispenser\n");
+                Serial.println(F("=================================================="));
+                break;
             case '?':
             case 'h':
             case 'H':
@@ -384,6 +403,7 @@ private:
                 Serial.println(F("   [x] Emergency Stop / Abort"));
                 Serial.println(F("   [s] Dump JSON Telemetry"));
                 Serial.println(F("   [p] Probe Real-Time Pin Levels"));
+                Serial.println(F("   [w] Query Wi-Fi & OTA Network Status"));
                 Serial.println(F("   [?] Display this diagnostic menu"));
                 Serial.println(F("=================================================="));
                 break;
