@@ -47,6 +47,113 @@ Smart drinking water dispenser controller firmware engineered for **ESP32** (ESP
 
 ---
 
+## 📐 Circuit Schematic
+
+```
+=========================================================================================================
+                           CRAFTTHINGY ESP32 WATER DISPENSER SCHEMATIC
+=========================================================================================================
+
+  [ 3.7V - 4.2V Li-Po Battery ]
+             │
+             ▼
+    ┌─────────────────┐
+    │  TP4056 + DW01A │  (Preserves short-circuit & under-voltage protection)
+    │  BMS Module     │
+    │   OUT+     OUT- │
+    └───┬──────────┬──┘
+        │          │
+        │          └──────────────────────────┬─────────────────────────────┬───────────────────────────┐
+        │                                     │                             │                           │
+        ▼ (3.7V Protected Rail)               ▼                             ▼                           │
+   ┌───────────────┐                  ┌───────────────┐                     │                           │
+   │ 5V STEP-UP    │                  │ 12V BOOST     │                     │                           │
+   │ BOOST MODULE  │                  │ CONVERTER     │                     │                           │
+   │  VIN+    VIN- │                  │  VIN+    VIN- │                     │                           │
+   │   │        │  │                  │   │        │  │                     │                           │
+   │  VOUT+   VOUT-│                  │  VOUT+   VOUT-│                     │                           │
+   └───┬────────┬──┘                  └───┬────────┬──┘                     │                           │
+       │        │                         │        │                        │                           │
+       │        └─────────────────────────┼────────┼────────────────────────┤                           │
+       │                                  │        │                        │                           │
+       ▼ (5.0V Rail)                      ▼ (12V)  └────────────────────────┼─────────────┐             │
+┌───────────────────────────┐      [ 12V PUMP MOTOR ]                       │             │             │
+│ ESP32 DEVKIT              │        Positive (+) ◄─────────────────────────┘             │             │
+│                           │        Negative (-) ──┐                                     │             │
+│   [VIN / 5V] ◄────────────┘                       │                                     │             │
+│   [GND]      ◄────────────────────────────────────┼─────────────────────────────────────┼─────────────┘
+│                                                   │                                     │
+│   [GPIO 18]  ◄── [ Left Btn (40s) ]       ────┐   │                                     │
+│   [GPIO 19]  ◄── [ Mid Btn (Toggle/Stop) ] ───┼───┴─────────► (To Common Ground)        │
+│   [GPIO 21]  ◄── [ Right Btn (80s) ]      ────┘                                         │
+│                                                                                         │
+│   [GPIO 2]   ──► Onboard Blue LED (Status Feedback)                                     │
+│                                                                                         │
+│   [GPIO 22]  ───[ 220Ω Resistor ]───┐                                                   │
+│   (LEDC PWM)                        │                                                   │
+└─────────────────────────────────────┼───────────────────────────────────────────────────┼─────────────┐
+                                      │                                                   │             │
+                                      ▼                                                   │             │
+                         ┌─────────────────────────┐                                      │             │
+                         │ IRLZ44N MOSFET          │                                      │             │
+                         │                         │                                      │             │
+                         │ Gate (Pin 1) ◄──────────┘                                      │             │
+                         │ Drain (Pin 2 / Tab) ◄──────────────────────────────────────────┘             │
+                         │ Source (Pin 3) ──────────────────────────────────────────────────────────────┘
+                         │                                                                (To Common Ground)
+                         │ * 10kΩ Pull-down Resistor placed
+                         │   directly between Gate (Pin 1) and Source (Pin 3)
+                         └─────────────────────────┘
+
+* Inductive Spike Protection:
+  Solder 1N4007 Diode directly across 12V Pump Motor terminals
+  (Cathode stripe ──► Motor Positive / 12V+, Anode ──► Motor Negative / Drain).
+
+* Buffer Capacitor:
+  Place a 470µF - 1000µF electrolytic capacitor across 12V Boost VIN+ and VIN- to absorb motor start surge.
+```
+
+### Circuit Wiring Walkthrough
+
+1. **Power Path & Battery Protection**:
+   * Connect Li-Po battery directly to **`B+`** and **`B-`** on the TP4056 board.
+   * **ALL power must exit via `OUT+` and `OUT-`** to maintain DW01A over-discharge, over-current, and short-circuit protection.
+   * Connect a miniature 5V step-up booster to `OUT+` / `OUT-`, feeding 5V to the ESP32 **`VIN`** (or `5V`) pin and **`GND`**.
+   * Connect the 12V boost converter to `OUT+` / `OUT-`. Place a **470µF–1000µF electrolytic capacitor** directly across `VIN+` and `VIN-`.
+
+2. **Motor & Flyback Diode**:
+   * Pump Positive terminal connects directly to **`VOUT+` (12V)** of the 12V Boost Converter.
+   * Pump Negative terminal connects to **IRLZ44N Drain (Pin 2 / Center Tab)**.
+   * **1N4007 Diode**: Solder directly across motor wires with the white stripe (Cathode) facing **12V+** and the black end (Anode) facing **Drain**.
+
+3. **MOSFET Gate Drive**:
+   * Connect **GPIO 22** through a **220Ω** series current-limiting resistor to **Gate (Pin 1)**.
+   * Connect a **10kΩ** pull-down resistor directly between **Gate (Pin 1)** and **Source (Pin 3)** to hold the MOSFET fully OFF while the ESP32 is booting.
+   * Connect **Source (Pin 3)** to **Common Ground**.
+
+4. **Buttons**:
+   * Wire one side of each momentary pushbutton to **GPIO 18** (Left), **GPIO 19** (Middle), and **GPIO 21** (Right).
+   * Wire the other side of all three buttons to **ESP32 GND**. (Internal pull-ups + 50ms software noise debounce are active in firmware).
+
+---
+
+## 🧰 Bill of Materials (BOM)
+
+| Component | Specification | Connection / Notes |
+| :--- | :--- | :--- |
+| **Microcontroller** | ESP32-WROOM-32 / DevKit v1 | 240MHz Dual Core, Wi-Fi OTA, hardware LEDC PWM |
+| **MOSFET** | IRLZ44N (Logic-Level N-Channel) | Low-side motor switch (logic-level $V_{GS(th)} < 2.0\text{V}$) |
+| **Step-Up Boost (12V)** | Mini DC-DC Step-Up (3.7V $\to$ 12V) | Powers 12V DC pump motor from protected LiPo rail |
+| **Step-Up Boost (5V)** | Micro 5V Boost (3.7V $\to$ 5V) | Clean, stable 5.0V supply for ESP32 VIN without thermal throttling |
+| **BMS / Charger** | TP4056 + DW01A Module | Safe USB charging and continuous Li-Po battery protection |
+| **Flyback Diode** | 1N4007 (or 1N5819 Schottky) | Clamps inductive motor back-EMF spikes |
+| **Gate Resistor** | 220 $\Omega$ (Red-Red-Brown, 1/4W) | Limits ESP32 GPIO inrush current to MOSFET gate capacitance |
+| **Gate Pull-Down** | 10 k$\Omega$ (Brown-Black-Orange, 1/4W) | Holds Gate LOW during ESP32 power-on / reset |
+| **Buffer Capacitor** | 470 $\mu$F – 1000 $\mu$F 16V Electrolytic | Buffers motor startup current spike at boost converter input |
+| **Buttons** | 3x Tactile Pushbuttons | Panel-mount buttons for 40s, Toggle/Cancel, and 80s |
+
+---
+
 ## 🌐 REST API Endpoints (Port 80)
 
 ### 1. Trigger Dispense (`POST /api/v1/dispenser/command`)
