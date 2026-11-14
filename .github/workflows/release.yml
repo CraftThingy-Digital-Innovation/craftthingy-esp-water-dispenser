@@ -1,0 +1,184 @@
+name: Build and Release Water Dispenser Firmware
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Water Dispenser Firmware & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Core OTA Framework
+        uses: actions/checkout@v4
+        with:
+          repository: CraftThingy-Digital-Innovation/craftthingy-esp-core-ota
+          path: .core_ota_repo
+
+      - name: Link Core Framework Directory
+        run: |
+          mkdir -p ../craftthingy-esp-core-ota
+          cp -r .core_ota_repo/* ../craftthingy-esp-core-ota/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO Core
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio intelhex cryptography
+
+      - name: Build All Board Targets
+        run: |
+          pio run -e esp01_1m
+          pio run -e esp32dev
+          pio run -e esp32s3
+          pio run -e esp32c3
+
+      - name: Package Firmware Binaries, Tools & Calculate Hashes
+        run: |
+          mkdir -p release_assets
+          cp .pio/build/esp01_1m/firmware.bin release_assets/firmware-water_dispenser-esp01s.bin
+          cp .pio/build/esp32dev/firmware.bin release_assets/firmware-water_dispenser-esp32.bin
+          cp .pio/build/esp32s3/firmware.bin release_assets/firmware-water_dispenser-esp32s3.bin
+          cp .pio/build/esp32c3/firmware.bin release_assets/firmware-water_dispenser-esp32c3.bin
+          
+          # Package Companion Tools & Rescue Utilities
+          cp tools/esp_manager.html release_assets/esp_manager.html
+          cp tools/ota_rescue_bridge.py release_assets/ota_rescue_bridge.py
+          cp tools/dispenser_ctl.py release_assets/dispenser_ctl.py
+          cp tools/RESCUE_GUIDE.md release_assets/RESCUE_GUIDE.md
+
+          cd release_assets
+          for f in *.bin; do
+            sha256sum "$f" > "${f}.sha256"
+          done
+
+      - name: Determine Target Tag & Generate Rich Release Notes
+        id: release_meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+          # Extract commit logs since previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || git tag -l --sort=-v:refname | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            DISPENSER_COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (\`%h\` by @%an)")
+          else
+            DISPENSER_COMMITS=$(git log -n 10 --pretty=format:"* %s (\`%h\` by @%an)")
+          fi
+
+          CORE_COMMITS=$(cd .core_ota_repo && git log -n 5 --pretty=format:"* %s (\`%h\` by @%an)")
+
+          # Extract binary sizes
+          SIZE_ESP01=$(wc -c < release_assets/firmware-water_dispenser-esp01s.bin)
+          SIZE_ESP32=$(wc -c < release_assets/firmware-water_dispenser-esp32.bin)
+          SIZE_ESP32S3=$(wc -c < release_assets/firmware-water_dispenser-esp32s3.bin)
+          SIZE_ESP32C3=$(wc -c < release_assets/firmware-water_dispenser-esp32c3.bin)
+
+          KB_ESP01=$((SIZE_ESP01 / 1024))
+          KB_ESP32=$((SIZE_ESP32 / 1024))
+          KB_ESP32S3=$((SIZE_ESP32S3 / 1024))
+          KB_ESP32C3=$((SIZE_ESP32C3 / 1024))
+
+          cat << EOF > release_notes.md
+          ## 💧 CraftThingy Smart Water Dispenser Controller - ${TAG}
+
+          Official production release of the smart Water Dispenser Controller module for the **CraftThingy Digital Innovation** ecosystem.
+
+          ### 🚀 What's Changed in this Release
+          #### 💧 Dispenser Application Updates:
+          ${DISPENSER_COMMITS}
+
+          #### ⚙️ Core OTA Framework Updates:
+          ${CORE_COMMITS}
+
+          ---
+
+          ### 📦 Pre-Compiled Firmware Binaries & Hardware Targets
+          Download the appropriate binary matching your hardware target:
+
+          | Target Board | Architecture | Flash Size / Mode | Binary Size | Max OTA Slot | Flash Utilization | Asset Name | Checksum |
+          |---|---|---|---|---|---|---|---|
+          | **ESP-01 / ESP-01S** | ESP8266EX | 1MB / DOUT (512K+512K OTA) | ${KB_ESP01} KB (${SIZE_ESP01} B) | 512 KB | ~$((SIZE_ESP01 * 100 / 512000))% | \`firmware-water_dispenser-esp01s.bin\` | \`.sha256\` |
+          | **ESP32 Standard** | Dual-Core Xtensa | 4MB+ / DIO (OTA) | ${KB_ESP32} KB (${SIZE_ESP32} B) | 1,920 KB | ~$((SIZE_ESP32 * 100 / 1966080))% | \`firmware-water_dispenser-esp32.bin\` | \`.sha256\` |
+          | **ESP32-S3** | Dual-Core Xtensa | 8MB / QIO (OTA) | ${KB_ESP32S3} KB (${SIZE_ESP32S3} B) | 3,328 KB | ~$((SIZE_ESP32S3 * 100 / 3407872))% | \`firmware-water_dispenser-esp32s3.bin\` | \`.sha256\` |
+          | **ESP32-C3** | Single-Core RISC-V | 4MB / DIO (OTA) | ${KB_ESP32C3} KB (${SIZE_ESP32C3} B) | 1,920 KB | ~$((SIZE_ESP32C3 * 100 / 1966080))% | \`firmware-water_dispenser-esp32c3.bin\` | \`.sha256\` |
+
+          ---
+
+          ### 🛠️ Companion Management & Rescue Tools
+          Directly download zero-install tools included in this release:
+
+          | Tool Asset | Type | Purpose | How to Run |
+          |---|---|---|---|
+          | **\`esp_manager.html\`** | Single-file Web App | Zero-install browser UI: Live telemetry, dual App/Core versions, Wi-Fi config, HMAC key ratchet | Double-click to open in any browser |
+          | **\`ota_rescue_bridge.py\`** | Python 3 Utility | 100% Wireless recovery bridge serving paced 1024-byte TLS records for buffer-limited ESPs | \`python ota_rescue_bridge.py --esp <IP>\` |
+          | **\`dispenser_ctl.py\`** | Python 3 CLI | CLI for real-time dispensing status, 40s/80s/continuous control, and emergency stop | \`python tools/dispenser_ctl.py status --host <IP>\` |
+          | **\`RESCUE_GUIDE.md\`** | Markdown Guide | Step-by-step wireless recovery manual for AP mode and isolated environments | Read for troubleshooting |
+
+          ---
+
+          ### 🛡️ Features Included in this Release
+          - **Smart Dispensing Modes**: 40s Mode, 80s Mode, and Continuous Mode with a 15-minute auto-cutoff safety limit.
+          - **500ms Soft-Start Ramp**: Eliminates high-current inrush on battery and motor brushes using 1kHz LEDC PWM.
+          - **50ms Anti-Spark Noise Filter**: Prevents phantom button triggers and inductive kickback false alarms.
+          - **Smart Mode Switching**: 40s $\to$ 80s extends total pour time to 80s; 80s $\to$ 40s cancels immediately. Same button press stops pour.
+          - **Dual Version Telemetry**: Distinct reporting of App Version (${TAG}) and Core Version.
+          - **Zero-Debris OTA Safety Interlock**: Firmware updates are rejected while dispensing to prevent mid-pour water overflow.
+
+          ---
+
+          ### ⚡ Installation & Flashing Instructions
+
+          #### 1. Over-The-Air (OTA) Switching from Core Firmware
+          To switch a connected ESP running \`craftthingy-esp-core-ota\` to this module via API:
+          \`\`\`bash
+          python tools/craftthingy_esp_ctl.py set-github --host 192.168.4.1 \\
+            --org "CraftThingy-Digital-Innovation" \\
+            --ctrl "craftthingy-esp-water-dispenser" \\
+            --role "water_dispenser" \\
+            --key "<CURRENT_KEY>"
+          \`\`\`
+
+          #### 2. First-Time USB Flashing
+          \`\`\`bash
+          pio run -e esp32dev --target upload
+          \`\`\`
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "CraftThingy Water Dispenser Controller ${{ steps.release_meta.outputs.tag }}"
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          body_path: release_notes.md
+          files: release_assets/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
