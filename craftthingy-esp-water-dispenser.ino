@@ -2,6 +2,11 @@
 #include <CraftThingyCore.h>
 #include "WaterDispenserController.h"
 
+#if defined(ESP32)
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+#endif
+
 // Hardware Pin Assignment for ESP32:
 // - GPIO 18: Button Left (40s Dispense)
 // - GPIO 19: Button Middle (Continuous / Cancel / Abort)
@@ -15,6 +20,11 @@
 #endif
 
 void setup() {
+#if defined(ESP32)
+    // Disable ESP32 brownout detector so motor inrush voltage sag does not crash/reboot the MCU
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+#endif
+
     Serial.begin(115200);
     delay(300);
 

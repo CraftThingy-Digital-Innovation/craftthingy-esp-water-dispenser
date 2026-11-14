@@ -23,6 +23,7 @@ public:
           _mode(MODE_IDLE), _pumpRunning(false),
           _pumpStartMs(0), _pumpDurationMs(0),
           _pwmChannel(0), _pwmLimited(false),
+          _maxDuty(215),
           _softStartActive(false), _softStartStartMs(0), _softStartBlinks(1),
           _ledSolidOn(false) {
     }
@@ -87,25 +88,48 @@ public:
         }
 
         // -------------------------------------------------------------
+        // 0.1 Real-Time Pin Transition Logger
+        // -------------------------------------------------------------
+        int leftRaw = digitalRead(_btnLeftPin);
+        int midRaw = digitalRead(_btnMidPin);
+        int rightRaw = digitalRead(_btnRightPin);
+
+        if (leftRaw != _lastLeftRaw) {
+            _lastLeftRaw = leftRaw;
+            Serial.printf("[PIN-EVENT] Left Button (GPIO %d) -> %s\n", 
+                          _btnLeftPin, leftRaw == LOW ? "LOW (Ground / Active)" : "HIGH (Pulled-Up / Idle)");
+        }
+        if (midRaw != _lastMidRaw) {
+            _lastMidRaw = midRaw;
+            Serial.printf("[PIN-EVENT] Middle Button (GPIO %d) -> %s\n", 
+                          _btnMidPin, midRaw == LOW ? "LOW (Ground / Active)" : "HIGH (Pulled-Up / Idle)");
+        }
+        if (rightRaw != _lastRightRaw) {
+            _lastRightRaw = rightRaw;
+            Serial.printf("[PIN-EVENT] Right Button (GPIO %d) -> %s\n", 
+                          _btnRightPin, rightRaw == LOW ? "LOW (Ground / Active)" : "HIGH (Pulled-Up / Idle)");
+        }
+
+        // -------------------------------------------------------------
         // 1. Soft-Start Ramp & Concurrent Mode Blinking
         // -------------------------------------------------------------
         if (_softStartActive) {
             uint32_t elapsed = now - _softStartStartMs;
             if (elapsed < 500) {
-                // Smooth duty ramp from 10 (4%) up to 255 (100% full power) over 500ms
-                uint32_t duty = 10 + (elapsed * (255 - 10)) / 500;
+                // Smooth duty ramp from 10 up to _maxDuty (84% sweet spot) over 500ms
+                uint32_t duty = 10 + (elapsed * (_maxDuty - 10)) / 500;
                 setGateDuty((uint8_t)duty);
 
                 // Concurrent LED Mode Blinking during 500ms ramp
                 bool ledOn = calculateSoftStartLed(elapsed, _softStartBlinks);
                 digitalWrite(_ledPin, ledOn ? HIGH : LOW);
             } else {
-                // Ramp complete: 100% full power & solid LED
-                setGateDuty(255);
+                // Ramp complete: 84% power & solid LED
+                setGateDuty(_maxDuty);
                 digitalWrite(_ledPin, HIGH);
                 _softStartActive = false;
                 _ledSolidOn = true;
-                Serial.println(F("[MOTOR] Soft-start ramp complete -> 100% Full Power (Duty 255/255)"));
+                Serial.printf("[MOTOR] Soft-start ramp complete -> Power: %d/255 (84%%) to protect boost & battery\n", _maxDuty);
             }
         }
 
@@ -269,6 +293,7 @@ private:
 
     uint8_t _pwmChannel;
     bool _pwmLimited;
+    uint8_t _maxDuty;
 
     bool _softStartActive;
     uint32_t _softStartStartMs;
@@ -284,6 +309,10 @@ private:
 
     uint32_t _rightPressStartMs = 0;
     bool _rightTriggered = false;
+
+    int _lastLeftRaw = -1;
+    int _lastMidRaw = -1;
+    int _lastRightRaw = -1;
 
     uint32_t _lastPeriodicReportMs = 0;
 
@@ -322,6 +351,18 @@ private:
                 Serial.println(F("\n[UART-CMD] Status Query:"));
                 Serial.println(getStatusJson());
                 break;
+            case 'p':
+            case 'P':
+                Serial.printf("\n[PIN-DIAG] Real-Time Button & Gate Pin Levels:\n");
+                Serial.printf("  - Left Button  (GPIO %d) : %s (digitalRead = %d)\n", 
+                              _btnLeftPin, digitalRead(_btnLeftPin) == LOW ? "LOW (Pressed)" : "HIGH (Released)", digitalRead(_btnLeftPin));
+                Serial.printf("  - Mid Button   (GPIO %d) : %s (digitalRead = %d)\n", 
+                              _btnMidPin, digitalRead(_btnMidPin) == LOW ? "LOW (Pressed)" : "HIGH (Released)", digitalRead(_btnMidPin));
+                Serial.printf("  - Right Button (GPIO %d) : %s (digitalRead = %d)\n", 
+                              _btnRightPin, digitalRead(_btnRightPin) == LOW ? "LOW (Pressed)" : "HIGH (Released)", digitalRead(_btnRightPin));
+                Serial.printf("  - MOSFET Gate  (GPIO %d) : %s (digitalRead = %d)\n", 
+                              _gatePin, digitalRead(_gatePin) == HIGH ? "HIGH (MOSFET ON)" : "LOW (MOSFET OFF)", digitalRead(_gatePin));
+                break;
             case '?':
             case 'h':
             case 'H':
@@ -342,6 +383,7 @@ private:
                 Serial.println(F("   [c] Dispense Continuous (15m safety max)"));
                 Serial.println(F("   [x] Emergency Stop / Abort"));
                 Serial.println(F("   [s] Dump JSON Telemetry"));
+                Serial.println(F("   [p] Probe Real-Time Pin Levels"));
                 Serial.println(F("   [?] Display this diagnostic menu"));
                 Serial.println(F("=================================================="));
                 break;
@@ -393,9 +435,9 @@ private:
     }
 
     /**
-     * 50ms Anti-Spark Noise Filter:
-     * Requires the button pin to be held continuously LOW for at least 50ms
-     * to eliminate motor brush electrical sparks. Fires on the leading edge.
+     * Responsive 20ms Debounce Filter:
+     * Fires cleanly when finger presses button for 20ms.
+     * Automatically arms again as soon as the button is released.
      */
     bool checkButtonDebounced(uint8_t pin, uint32_t& pressStartMs, bool& triggered) {
         bool isLow = (digitalRead(pin) == LOW);
@@ -404,8 +446,8 @@ private:
         if (isLow) {
             if (pressStartMs == 0) {
                 pressStartMs = now; // First detected low edge
-            } else if ((now - pressStartMs >= 50) && !triggered) {
-                // Held solidly for >= 50ms! Valid human finger press!
+            } else if ((now - pressStartMs >= 20) && !triggered) {
+                // Held for >= 20ms! Valid human finger press!
                 triggered = true;
                 return true;
             }
