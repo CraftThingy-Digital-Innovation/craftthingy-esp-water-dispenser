@@ -80,3 +80,4 @@ C:\Python312\python.exe -m platformio run -e esp32dev --target upload
 # Monitor Serial output:
 C:\Python312\python.exe -m platformio device monitor -b 115200
 ```
+
